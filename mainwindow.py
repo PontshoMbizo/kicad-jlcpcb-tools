@@ -647,6 +647,7 @@ class JLCPCBTools(wx.Dialog):
         self.Bind(EVT_BOM_DATA_CHANGED_EVENT, self.on_bom_data_changed)
 
         self.enable_part_specific_toolbar_buttons(False)
+        self.apply_fab_house_ui()
 
         self.init_logger()
         self.partlist_data_model = PartListDataModel(self.scale_factor)
@@ -1190,6 +1191,8 @@ class JLCPCBTools(wx.Dialog):
 
     def enable_part_specific_toolbar_buttons(self, state):
         """Control the state of all the buttons that relate to parts in toolbar on the right side."""
+        jlc_only = (ID_SELECT_PART, ID_REMOVE_LCSC_NUMBER, ID_PART_DETAILS)
+        pcbway = self.is_pcbway()
         for button in (
             ID_SELECT_PART,
             ID_REMOVE_LCSC_NUMBER,
@@ -1200,7 +1203,8 @@ class JLCPCBTools(wx.Dialog):
             ID_HIDE_BOM,
             ID_HIDE_POS,
         ):
-            self.right_toolbar.EnableTool(button, state)
+            enabled = state and not pcbway if button in jlc_only else state
+            self.right_toolbar.EnableTool(button, enabled)
 
     def toggle_bom_pos(self, *_):
         """Toggle the exclude from BOM/POS attribute of a footprint."""
@@ -1275,6 +1279,9 @@ class JLCPCBTools(wx.Dialog):
 
     def get_part_details(self, *_):
         """Show Part Details for each selected footprint (modeless windows)."""
+        if self.is_pcbway():
+            self.logger.info("This is a JLCPCB feature and is disabled in PCBWay mode")
+            return
         for item in self.footprint_list.GetSelections():
             if lcsc := self.partlist_data_model.get_lcsc(item):
                 self.show_part_details_dialog(lcsc)
@@ -1286,6 +1293,9 @@ class JLCPCBTools(wx.Dialog):
 
     def update_library(self, *_):
         """Update the library from the JLCPCB CSV file."""
+        if self.is_pcbway():
+            self.logger.info("This is a JLCPCB feature and is disabled in PCBWay mode")
+            return
         self.library.update()
 
     def manage_corrections(self, *_):
@@ -1300,6 +1310,34 @@ class JLCPCBTools(wx.Dialog):
         """Manage settings."""
         SettingsDialog(self).ShowModal()
 
+    def get_fab_house(self):
+        """Return the configured fabrication house key."""
+        return self.settings.get("general", {}).get("fab_house", "jlcpcb")
+
+    def is_pcbway(self):
+        """Return True when PCBWay is the selected fabrication house."""
+        return self.get_fab_house() == "pcbway"
+
+    def apply_fab_house_ui(self):
+        """Enable/disable JLCPCB-only UI depending on the fabrication house."""
+        pcbway = self.is_pcbway()
+        self.upper_toolbar.EnableTool(ID_DOWNLOAD, not pcbway)
+        self.upper_toolbar.SetToolShortHelp(
+            ID_GENERATE,
+            "Generate fabrication files for PCBWay"
+            if pcbway
+            else "Generate fabrication files for JLCPCB",
+        )
+        for button in (
+            ID_SELECT_PART,
+            ID_REMOVE_LCSC_NUMBER,
+            ID_PART_DETAILS,
+            ID_SELECT_ALIKE,
+        ):
+            self.right_toolbar.EnableTool(button, not pcbway)
+        self.bom_widget.set_visible(self.bom_estimator_show and not pcbway)
+        self.Layout()
+
     def update_settings(self, e):
         """Update the settings on change."""
         if e.section not in self.settings:
@@ -1309,8 +1347,14 @@ class JLCPCBTools(wx.Dialog):
         if e.section == "general":
             if e.setting == "bom_estimator_show":
                 self.bom_estimator_show = bool(e.value)
-                self.bom_widget.set_visible(self.bom_estimator_show)
+                self.bom_widget.set_visible(
+                    self.bom_estimator_show and not self.is_pcbway()
+                )
                 self.Layout()
+            elif e.setting == "fab_house":
+                if hasattr(self, "fabrication"):
+                    self.fabrication.create_folders()
+                self.apply_fab_house_ui()
             elif e.setting == "highlight_standard_parts":
                 self.highlight_standard_parts = bool(e.value)
                 self.partlist_data_model.set_standard_trigger_highlighting_enabled(
@@ -1338,7 +1382,12 @@ class JLCPCBTools(wx.Dialog):
         gerber_settings = self.settings.setdefault("gerber", {})
         highlighting_settings = self.settings.setdefault("highlighting", {})
         partselector_settings = self.settings.setdefault("partselector", {})
+        general_settings = self.settings.setdefault("general", {})
         migrated = False
+
+        if general_settings.get("fab_house") not in ("jlcpcb", "pcbway"):
+            general_settings["fab_house"] = "jlcpcb"
+            migrated = True
 
         if "matches" not in highlighting_settings:
             if "highlight_matches" in partselector_settings:
@@ -1379,6 +1428,9 @@ class JLCPCBTools(wx.Dialog):
 
     def select_part(self, *_):
         """Select a part from the library and assign it to the selected footprint(s)."""
+        if self.is_pcbway():
+            self.logger.info("This is a JLCPCB feature and is disabled in PCBWay mode")
+            return
         selection = {}
         for item in self.footprint_list.GetSelections():
             ref = self.partlist_data_model.get_reference(item)
@@ -1469,6 +1521,7 @@ class JLCPCBTools(wx.Dialog):
         env.update(
             {
                 "JLCPCB_HOOK_STAGE": stage,
+                "JLCPCB_FAB_HOUSE": self.get_fab_house(),
                 "JLCPCB_BOARD_PATH": board_filename,
                 "JLCPCB_PROJECT_DIR": self.project_path,
                 "JLCPCB_OUTPUT_DIR": self.fabrication.outputdir,
@@ -1543,7 +1596,10 @@ class JLCPCBTools(wx.Dialog):
                     )
                     return
 
-            if self.settings.get("general", {}).get("order_number"):
+            if (
+                self.settings.get("general", {}).get("order_number")
+                and not self.is_pcbway()
+            ):
                 count = self.run_generation_step(
                     "Checking order/serial placeholders",
                     self.count_order_number_placeholders,
@@ -1591,7 +1647,10 @@ class JLCPCBTools(wx.Dialog):
             else:
                 layer_count = None
 
-            if self.settings.get("general", {}).get("order_number"):
+            if (
+                self.settings.get("general", {}).get("order_number")
+                and not self.is_pcbway()
+            ):
                 placeholder_count = count
             else:
                 placeholder_count = self.count_order_number_placeholders()

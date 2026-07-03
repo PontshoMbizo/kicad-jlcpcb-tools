@@ -32,7 +32,13 @@ from pcbnew import (  # pylint: disable=import-error
     wxPoint,
 )
 
-from .footprint_helpers import get_is_dnp
+from .fab_profiles import get_profile
+from .footprint_helpers import (
+    get_is_dnp,
+    get_manufacturer,
+    get_mfg_part_number,
+    get_smd_tht,
+)
 
 # Compatibility hack for V6 / V7 / V7.99
 try:
@@ -98,11 +104,17 @@ class Fabrication:
         self.path, self.filename = os.path.split(self.board.GetFileName())
         self.create_folders()
 
+    def get_fab_profile(self):
+        """Return the active fabrication-house profile dict."""
+        fab_house = self.parent.settings.get("general", {}).get("fab_house", "jlcpcb")
+        return get_profile(fab_house)
+
     def create_folders(self):
         """Create output folders if they not already exist."""
-        self.outputdir = os.path.join(self.path, "jlcpcb", "production_files")
+        subdir = self.get_fab_profile()["output_subdir"]
+        self.outputdir = os.path.join(self.path, subdir, "production_files")
         Path(self.outputdir).mkdir(parents=True, exist_ok=True)
-        self.gerberdir = os.path.join(self.path, "jlcpcb", "gerber")
+        self.gerberdir = os.path.join(self.path, subdir, "gerber")
         Path(self.gerberdir).mkdir(parents=True, exist_ok=True)
 
     def get_gerber_zip_path(self):
@@ -269,8 +281,10 @@ class Fabrication:
 
         popt.SetSketchPadsOnFabLayers(False)
 
+        profile = self.get_fab_profile()
+
         # Gerber Options
-        popt.SetUseGerberProtelExtensions(False)
+        popt.SetUseGerberProtelExtensions(profile["gerber_protel_extensions"])
 
         popt.SetCreateGerberJobFile(False)
 
@@ -288,9 +302,9 @@ class Fabrication:
                 not self.parent.settings.get("gerber", {}).get("tented_vias", True)
             )
 
-        popt.SetUseGerberX2format(True)
+        popt.SetUseGerberX2format(profile["gerber_x2_format"])
 
-        popt.SetIncludeGerberNetlistInfo(True)
+        popt.SetIncludeGerberNetlistInfo(profile["gerber_include_netlist"])
 
         popt.SetDisableGerberMacros(False)
 
@@ -348,7 +362,7 @@ class Fabrication:
         enabled_layer_ids = list(self.board.GetEnabledLayers().Seq())
         for enabled_layer_id in enabled_layer_ids:
             layer_name_string = str(self.board.GetLayerName(enabled_layer_id)).upper()
-            if "JLC_" in layer_name_string:
+            if "JLC_" in layer_name_string or "PCBWAY_" in layer_name_string:
                 plotter_info = (layer_name_string, enabled_layer_id, layer_name_string)
                 jlc_layers_to_plot.append(plotter_info)
         plot_plan += jlc_layers_to_plot
@@ -373,7 +387,7 @@ class Fabrication:
         offset = self.board.GetDesignSettings().GetAuxOrigin()
         mergeNPTH = False
         drlwriter.SetOptions(mirror, minimalHeader, offset, mergeNPTH)
-        drlwriter.SetFormat(False)
+        drlwriter.SetFormat(self.get_fab_profile()["drill_metric"])
         genDrl = True
         genMap = True
         drlwriter.CreateDrillandMapFilesSet(self.gerberdir, genDrl, genMap)
@@ -382,6 +396,7 @@ class Fabrication:
     def zip_gerber_excellon(self):
         """Zip Gerber and Excellon files, ready for upload to JLCPCB."""
         zip_path = self.get_gerber_zip_path()
+        include_all = self.get_fab_profile()["zip_include_all_files"]
         with ZipFile(
             zip_path,
             "w",
@@ -390,7 +405,7 @@ class Fabrication:
         ) as zipfile:
             for folderName, _, filenames in os.walk(self.gerberdir):
                 for filename in filenames:
-                    if not filename.endswith(("gbr", "drl", "pdf")):
+                    if not include_all and not filename.endswith(("gbr", "drl", "pdf")):
                         continue
                     filePath = os.path.join(folderName, filename)
                     zipfile.write(filePath, os.path.basename(filePath))
@@ -399,6 +414,8 @@ class Fabrication:
     def generate_cpl(self):
         """Generate placement file (CPL)."""
         cpl_path = self.get_cpl_csv_path()
+        profile = self.get_fab_profile()
+        pcbway = profile["key"] == "pcbway"
         self.corrections = self.parent.library.get_all_correction_data()
         aux_orgin = self.board.GetDesignSettings().GetAuxOrigin()
         add_without_lcsc = self.parent.settings.get("gerber", {}).get(
@@ -406,9 +423,7 @@ class Fabrication:
         )
         with open(cpl_path, "w", newline="", encoding="utf-8") as csvfile:
             writer = csv.writer(csvfile, delimiter=",")
-            writer.writerow(
-                ["Designator", "Val", "Package", "Mid X", "Mid Y", "Rotation", "Layer"]
-            )
+            writer.writerow(profile["cpl_header"])
             footprints = sorted(self.board.Footprints(), key=lambda x: x.GetReference())
             for fp in footprints:
                 if get_is_dnp(fp):
@@ -431,29 +446,43 @@ class Fabrication:
                     x2, y2 = aux_orgin
                     position = VECTOR2I(x1 - x2, y1 - y2)
                 position = self.fix_position(fp, position)
-                writer.writerow(
-                    [
-                        part["reference"],
-                        part["value"],
-                        part["footprint"],
-                        ToMM(position.x),
-                        ToMM(position.y) * -1,
-                        self.fix_rotation(fp),
-                        "top" if fp.GetLayer() == 0 else "bottom",
-                    ]
-                )
+                mid_x = ToMM(position.x)
+                mid_y = ToMM(position.y) * -1
+                rotation = self.fix_rotation(fp)
+                if pcbway:
+                    layer = "Top" if fp.GetLayer() == 0 else "Bottom"
+                    writer.writerow([part["reference"], mid_x, mid_y, layer, rotation])
+                else:
+                    layer = "top" if fp.GetLayer() == 0 else "bottom"
+                    writer.writerow(
+                        [
+                            part["reference"],
+                            part["value"],
+                            part["footprint"],
+                            mid_x,
+                            mid_y,
+                            rotation,
+                            layer,
+                        ]
+                    )
         self.logger.info("Finished generating CPL file %s", cpl_path)
 
     def generate_bom(self):
         """Generate BOM file."""
         bom_path = self.get_bom_csv_path()
+        profile = self.get_fab_profile()
+        pcbway = profile["key"] == "pcbway"
         add_without_lcsc = self.parent.settings.get("gerber", {}).get(
             "lcsc_bom_cpl", True
         )
+        if pcbway:
+            # PCBWay assembly does not require LCSC numbers; never drop parts here.
+            add_without_lcsc = True
         footprints = {fp.GetReference(): fp for fp in self.board.Footprints()}
         with open(bom_path, "w", newline="", encoding="utf-8") as csvfile:
             writer = csv.writer(csvfile, delimiter=",")
-            writer.writerow(["Comment", "Designator", "Footprint", "LCSC", "Quantity"])
+            writer.writerow(profile["bom_header"])
+            item_number = 0
             for part in self.parent.store.read_bom_parts():
                 if not add_without_lcsc and not part["lcsc"]:
                     self.logger.info(
@@ -473,16 +502,34 @@ class Fabrication:
                     components.append(component)
                 if not components:
                     continue
-                for chunk in split_bom_designators(components):
+                if pcbway:
+                    item_number += 1
+                    first_fp = footprints.get(components[0])
                     writer.writerow(
                         [
+                            item_number,
+                            ",".join(components),
+                            len(components),
+                            get_manufacturer(first_fp) if first_fp else "",
+                            get_mfg_part_number(first_fp) if first_fp else "",
                             part["value"],
-                            ",".join(chunk),
                             part["footprint"],
+                            get_smd_tht(first_fp),
                             part["lcsc"],
-                            len(chunk),
+                            "",
                         ]
                     )
+                else:
+                    for chunk in split_bom_designators(components):
+                        writer.writerow(
+                            [
+                                part["value"],
+                                ",".join(chunk),
+                                part["footprint"],
+                                part["lcsc"],
+                                len(chunk),
+                            ]
+                        )
         self.logger.info("Finished generating BOM file %s", bom_path)
 
     def get_part_consistency_warnings(self) -> str:

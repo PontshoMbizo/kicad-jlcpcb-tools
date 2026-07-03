@@ -9,6 +9,7 @@ import wx  # pylint: disable=import-error
 from .bom_estimation.help_text import show_bom_estimator_help
 from .dblib import LIBRARY_CONFIGS
 from .events import UpdateSetting
+from .fab_profiles import PROFILES
 from .helpers import HighResWxSize, loadBitmapScaled
 
 
@@ -45,6 +46,37 @@ class SettingsDialog(wx.Dialog):
         # ---------------------------------------------------------------------
         # ------------------------- Change settings ---------------------------
         # ---------------------------------------------------------------------
+
+        ##### Fabrication house #####
+
+        fab_house_label = wx.StaticText(
+            self,
+            id=wx.ID_ANY,
+            label="Fabrication house:",
+            pos=wx.DefaultPosition,
+            size=wx.DefaultSize,
+        )
+        fab_house_choices = [profile["display_name"] for profile in PROFILES.values()]
+        self.fab_house_setting = wx.ComboBox(
+            self,
+            id=wx.ID_ANY,
+            value="",
+            choices=fab_house_choices,
+            pos=wx.DefaultPosition,
+            size=wx.DefaultSize,
+            style=wx.CB_READONLY,
+            name="general_fab_house",
+        )
+        self.fab_house_setting.SetToolTip(
+            wx.ToolTip(
+                "Select the fabrication house the production files are generated for"
+            )
+        )
+        self.fab_house_setting.Bind(wx.EVT_COMBOBOX, self.update_settings)
+
+        fab_house_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        fab_house_sizer.Add(fab_house_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        fab_house_sizer.Add(self.fab_house_setting, 1, wx.ALL | wx.EXPAND, 5)
 
         ##### Tented vias #####
 
@@ -670,6 +702,7 @@ class SettingsDialog(wx.Dialog):
         # ---------------------------------------------------------------------
 
         settings_grid = wx.GridSizer(0, 2, 0, 0)
+        settings_grid.Add(fab_house_sizer, 0, wx.ALL | wx.EXPAND, 5)
         settings_grid.Add(tented_vias_sizer, 0, wx.ALL | wx.EXPAND, 5)
         settings_grid.Add(fill_zones_sizer, 0, wx.ALL | wx.EXPAND, 5)
         settings_grid.Add(force_drc_sizer, 0, wx.ALL | wx.EXPAND, 5)
@@ -918,6 +951,9 @@ class SettingsDialog(wx.Dialog):
 
     def load_settings(self):
         """Load settings and set checkboxes accordingly."""
+        self.update_fab_house(
+            self.parent.settings.get("general", {}).get("fab_house", "jlcpcb")
+        )
         self.update_tented_vias(
             self.parent.settings.get("gerber", {}).get("tented_vias", True)
         )
@@ -974,6 +1010,11 @@ class SettingsDialog(wx.Dialog):
             self.parent.settings.get("hooks", {}).get("timeout_seconds", 30)
         )
 
+    def update_fab_house(self, fab_house_key):
+        """Update settings dialog according to the selected fabrication house."""
+        profile = PROFILES.get(fab_house_key, PROFILES["jlcpcb"])
+        self.fab_house_setting.SetStringSelection(profile["display_name"])
+
     def update_selected_library(self, library_key):
         """Update settings dialog according to the selected library."""
         if library_key in LIBRARY_CONFIGS:
@@ -1021,6 +1062,13 @@ class SettingsDialog(wx.Dialog):
             for key, config in LIBRARY_CONFIGS.items():
                 if config.display_name == value:
                     self.logger.debug("Selected library key: %s", key)
+                    value = key
+                    break
+
+        # Special handling for fab house selection: convert display name back to key
+        if section == "general" and name == "fab_house":
+            for key, profile in PROFILES.items():
+                if profile["display_name"] == value:
                     value = key
                     break
 

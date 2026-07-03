@@ -25,6 +25,7 @@ Leave script paths empty to disable hooks.
 Both hooks receive these environment variables:
 
 - `JLCPCB_HOOK_STAGE` (`pre` or `post`)
+- `JLCPCB_FAB_HOUSE` (`jlcpcb` or `pcbway`)
 - `JLCPCB_BOARD_PATH`
 - `JLCPCB_PROJECT_DIR`
 - `JLCPCB_OUTPUT_DIR`

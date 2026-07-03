@@ -136,6 +136,29 @@ This tool will automatically export all additional layers with the JLC_ prefix a
 
 ![Export Additional JLC Specific Layers](https://github.com/Bouni/kicad-jlcpcb-tools/raw/main/images/additional_jlc_layers.png)
 
+### PCBWay support
+
+The plugin can also generate fabrication files for PCBWay. Open the settings dialog and set
+`Fabrication house` to `PCBWay`.
+
+In PCBWay mode:
+
+- Output files are written to a `pcbway` directory instead of `jlcpcb` (same `gerber` and
+  `production_files` structure and file names).
+- Gerbers are plotted as RS-274X with Protel filename extensions (`.gtl`, `.gbl`, ...) and
+  without the X2 extensions, drill files are generated in metric units.
+- The BOM uses PCBWay's assembly template columns (`Item #`, `Designator`, `Qty`,
+  `Manufacturer`, `Mfg Part #`, `Description / Value`, `Package/Footprint`, `Type`,
+  `LCSC Part #`, `Your Instructions / Notes`). Manufacturer and part number are read from
+  footprint fields such as `Manufacturer`/`Mfr` and `MPN`/`Mfr. Part #`. Any assigned LCSC
+  number is included so PCBWay can source parts from LCSC.
+- The CPL/centroid file uses the columns `Designator`, `Mid X`, `Mid Y`, `Layer`, `Rotation`
+  with `Top`/`Bottom` layer values.
+- Additional layers with a `PCBWAY_` name prefix are exported the same way as `JLC_` layers.
+- JLCPCB-only features (parts database download, LCSC part assignment, part details and the
+  BOM price estimate) are disabled while PCBWay is selected. Rotation corrections are applied
+  in both modes.
+
 ## Footprint rotation correction
 
 JLCPCB seems to need corrected rotation information. @matthewlai implemented that in his [JLCKicadTools](https://github.com/matthewlai/JLCKicadTools) and I adopted his work in this plugin as well.

@@ -5,6 +5,30 @@ import re
 EXCLUDE_FROM_POS = 2
 EXCLUDE_FROM_BOM = 3
 
+FP_THROUGH_HOLE_BIT = 0
+FP_SMD_BIT = 1
+
+MANUFACTURER_FIELD_NAMES = {
+    "manufacturer",
+    "mfr",
+    "mfg",
+    "manufacturername",
+    "mfrname",
+    "mfgname",
+}
+MPN_FIELD_NAMES = {
+    "mpn",
+    "mfrpart",
+    "mfrpartnumber",
+    "mfrpartno",
+    "mfgpartnumber",
+    "mfgpartno",
+    "manufacturerpartnumber",
+    "manufacturerpart",
+    "partnumber",
+    "partno",
+}
+
 
 def get_lcsc_value(fp):
     """Get the first lcsc number (C123456 for example) from the properties of the footprint."""
@@ -41,6 +65,49 @@ def set_lcsc_value(fp, lcsc: str):
                 if field.GetName() == "LCSC":
                     field.SetVisible(False)
                     break
+
+
+def _normalize_field_name(name):
+    """Normalize a footprint field name for matching (lowercase, alphanumeric only)."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _get_field_by_names(footprint, names):
+    """Return the first non-empty footprint field whose normalized name is in *names*."""
+    try:
+        for field in footprint.GetFields():
+            if (
+                _normalize_field_name(field.GetName()) in names
+                and field.GetText().strip()
+            ):
+                return field.GetText().strip()
+    except AttributeError:
+        for key, value in footprint.GetProperties().items():
+            if _normalize_field_name(key) in names and value.strip():
+                return value.strip()
+    return ""
+
+
+def get_manufacturer(footprint):
+    """Get the manufacturer name from the footprint fields."""
+    return _get_field_by_names(footprint, MANUFACTURER_FIELD_NAMES)
+
+
+def get_mfg_part_number(footprint):
+    """Get the manufacturer part number from the footprint fields."""
+    return _get_field_by_names(footprint, MPN_FIELD_NAMES)
+
+
+def get_smd_tht(footprint):
+    """Return 'SMD', 'TH' or '' depending on the footprint attributes."""
+    if not footprint:
+        return ""
+    val = footprint.GetAttributes()
+    if get_bit(val, FP_SMD_BIT):
+        return "SMD"
+    if get_bit(val, FP_THROUGH_HOLE_BIT):
+        return "TH"
+    return ""
 
 
 def get_valid_footprints(board):
